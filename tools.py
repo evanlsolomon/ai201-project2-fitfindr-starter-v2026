@@ -24,8 +24,37 @@ import config  # noqa: F401 — you'll use this in search_listings
 from generate import generate
 from utils.data_loader import load_listings
 
+_STOPWORDS = {"a", "an", "the", "and", "or", "but", "with", "for", "to", "of",
+              "in", "on", "at", "by", "from", "as", "is", "are", "was", "were", "be", "been", "being"}
+
+
+def _keywords(text: str) -> set[str]:
+    """
+    Return a set of lowercase keywords from a string, with stopwords removed.
+
+    This is a helper for search_listings(- — it is not a tool itself.
+    """
+    words = re.findall(r"[a-z0-9]+", (text or "").lower())
+    return {w for w in words if w not in _STOPWORDS}
+
+
+def _size_tokens(size: str) -> set[str]:
+    cleaned = re.sub(r"\([^)]*\)", "", size or "")
+    parts = [p.strip().upper() for p in cleaned.split("/")]
+    return {p for p in parts if p}
+
+
+def _size_matches(wanted: str, listing_size: str) -> bool:
+    if not wanted:
+        return True
+    listing_tokens = _size_tokens(listing_size)
+    if any(token.startswith("ONE SIZE") for token in listing_tokens):
+        return True
+    return bool(_size_tokens(wanted) & listing_tokens)
+
 
 # ── Tool 1: search_listings ───────────────────────────────────────────────────
+
 
 def search_listings(
     description: str,
