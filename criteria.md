@@ -25,9 +25,10 @@ Given a query that matches at least one listing, the agent completes all three
 tool calls and returns a fit card — in at least 4 of 5 tries.
 
 **Why this target:**
-<!-- Why 4 of 5 and not 5 of 5? Something about your search, probably —
-     "my search is a plain keyword match and some phrasings will miss" is a
-     real answer. -->
+The search is deterministic, so the same query finds the same listings every
+time. The slack is for the two model calls: one rate-limit pause or failed
+request can cost a try without the loop being broken. Two misses would be a
+bug, not bad luck.
 
 ---
 
@@ -37,66 +38,64 @@ Given a query that matches no listings, the agent stops before calling
 `suggest_outfit` and returns a message naming what to change — 5 of 5 tries.
 
 **Why this target:**
-<!-- Why is 5 of 5 reasonable here when criterion 1 isn't? What's different
-     about this path? -->
+This path never calls the model (regex parse, deterministic search, an
+`if not results` check), so nothing should vary. The cheapest listing is $12
+and none are sized XS or XXS, so the test query can never match. A pass needs
+the message to name the size or price and say what to change — "No results"
+fails.
 
 ---
 
-## 3. Something about state
+## 3. The item search found is the item `suggest_outfit` received
 
-<!-- YOU WRITE THIS ONE.
-
-     How would you know that the item your search found is the same item the
-     next tool received? Name something countable or observable.
-
-     This is the criterion people find hardest, because state failure doesn't
-     look like state failure — it looks like a tool problem. Something that
-     compares session["selected_item"] against what actually reached
-     suggest_outfit is the shape you're after. -->
-
-
+For a matching query, `session["selected_item"]["id"]` is the same as
+`session["search_results"][0]["id"]` and the `id` of the item going into
+`suggest_outfit` in the trace — 5 of 5 tries.
 
 **Why this target:**
-
-
+Passing the item along is plain Python with no model involved, so it should
+never fail. A mismatch would mean a value skipped the session or got
+overwritten.
 
 ---
 
-## 4. Something about the fit card
+## 4. The fit card gets the facts right, even though the words change
 
-<!-- YOU WRITE THIS ONE.
+Run `'vintage graphic tee under $30'` 5 times. At least 4 of 5 fit cards:
 
-     The fit card calls a model, so the same input can produce different words
-     each time. That's not a bug — it's the nature of the tool. So what would
-     make it acceptable?
+- state the selected item's exact price (`$24` or `$24.00`; "under $25" doesn't count)
+- name its platform
+- are 2–4 sentences
 
-     Think about what you'd actually be unhappy to see. A caption that never
-     mentions the price? Two different items producing the same opening
-     sentence? A card longer than a caption anyone would post? Any of those can
-     be turned into a number. -->
-
-
+Across the five, at least 3 cards open with a different first sentence.
 
 **Why this target:**
-
-
+At `TEMPERATURE = 0.9` the wording should change; the price and platform
+shouldn't. 4 of 5 because the prompt can ask for those facts but can't force
+them. If all five cards open the same way, the cache or temperature is stuck.
 
 ---
 
-## 5. Your choice
+## 5. Search respects the size and price the user asked for
 
-<!-- YOU WRITE THIS ONE TOO.
+For each of these 5 queries, at least one result comes back and every result is
+at or under the price and in a matching size — 5 of 5 queries.
 
-     Pick something you actually care about getting right. Speed, the empty
-     wardrobe path, what happens when the model can't be reached, whether the
-     search respects a price ceiling — anything, as long as it names a number
-     or an observable outcome. -->
+1. `'vintage graphic tee under $30, size M'`
+2. `'denim jacket size L under $60'`
+3. `'jeans size W28'`
+4. `'flannel under $25'`
+5. `'top under $20, size S'`
 
-
+A matching size means the size appears as its own token: `M` matches `M`,
+`S/M`, `M/L` and `One Size`, but not `XL` or `US 7`.
 
 **Why this target:**
-
-
+No model is involved, so a filter that lets one wrong item through will do it
+every time. Sizes in the data mix letters, waists (`W28`), shoes (`US 7`) and
+`One Size`, so a plain substring check (`"s" in "us 7"` is true) is the likely
+bug. Query 1 has a listing at exactly $30, so it also checks that "under $30"
+includes $30.
 
 ---
 
