@@ -99,9 +99,16 @@
 
 **Where it lives:** `agent.py::run_agent`
 
-**How the query is parsed:** <!-- regex, string splitting, or asking the model — say which -->
+**How the query is parsed:** Regex, in `agent.py::parse_query`. A dollar amount (optionally after "under", "below", "max" or "up to") becomes `max_price`; "size M", "size US 7", "size W28" or a trailing ", M" becomes `size`; whatever is left is the `description`. Regex costs nothing and gives the same answer every time, but phrasing it hasn't seen ("nothing over thirty dollars") parses to no price ceiling.
 
-**What moves through the session:** <!-- which fields, in what order -->
+**What moves through the session:** in this order —
+1. `query` — what the user typed
+2. `parsed` — `description`, `size`, `max_price` from `parse_query`
+3. `search_results` — the list `search_listings` returned (the branch reads this)
+4. `selected_item` — `search_results[0]`; read back out of the session for both `suggest_outfit` and `create_fit_card`
+5. `outfit_suggestion` — what `suggest_outfit` returned; read back out for `create_fit_card`
+6. `fit_card` — what `create_fit_card` returned
+7. `error` — set only when the run stops early (empty search, or the model can't be reached); `fit_card` stays `None`
 
 ---
 
@@ -115,6 +122,47 @@
 **One full query**
 
 ```
+python agent.py
+=== A query the data can match ===
+[1] parse_query
+      in:  looking for a vintage graphic tee under $30
+      out: dict with keys: description, size, max_price
+[2] search_listings
+      in:  dict with keys: description, size, max_price
+      out: 10 items: Y2K Baby Tee — Butterfly Print, Vintage Band Tee — Faded Grey, Graphic Tee — 2003 Tour Bootleg Style … +7 more
+      →    10 match(es)
+[3] select_item
+      out: Y2K Baby Tee — Butterfly Print ($18.0, depop)
+[4] suggest_outfit
+      in:  Y2K Baby Tee — Butterfly Print ($18.0, depop)
+      out: Outfit 1: Pair the butterfly baby tee with your dark wash baggy straight-leg jeans and chunky white sneakers f…
+      →    10 wardrobe item(s)
+[5] create_fit_card
+      in:  Y2K Baby Tee — Butterfly Print ($18.0, depop)
+      out: Obsessed with this Y2K butterfly baby tee that just dropped in the shop for $18! It's giving major nostalgic v…
+  found:    Y2K Baby Tee — Butterfly Print — $18.0 on depop
+  outfit:   Outfit 1: Pair the butterfly baby tee with your dark wash baggy straight-leg jeans and chunky white sneakers for a classic Y2K street style look. Throw on the black cropped zip hoodie if you need an extra layer.
+
+Outfit 2: Contrast the sweet, graphic baby tee with your minimalist wide-leg khaki trousers and brown leather belt for a balanced, earthy vibe. Finish the outfit with your chunky white sneakers to keep it casual and fresh.
+  fit card: Obsessed with this Y2K butterfly baby tee that just dropped in the shop for $18! It's giving major nostalgic vibes, and I've been loving pairing it with dark wash baggy jeans and a chunky sneaker for that ultimate street style look. You can also dress it down with minimalist khaki trousers for a more earthy, balanced fit. Snag this gem over on my depop before it's gone!
+
+=== A query it can't ===
+[6] parse_query
+      in:  designer ballgown size XXS under $5
+      out: dict with keys: description, size, max_price
+[7] search_listings
+      in:  dict with keys: description, size, max_price
+      out: [] (empty)
+      →    0 match(es)
+[8] branch
+      →    search returned []: stopping before suggest_outfit
+  stopped: Nothing in the listings matched description 'designer ballgown', size XXS, under $5.
+Things to change: try broader words — 'jacket' finds more than 'cropped corduroy jacket'; drop the size, or try a neighbouring one; raise the price ceiling above $5.
+  fit_card is None — it should still be None here
+
+The second one should stop before the fit card. If both paths look the same,
+the branch isn't doing anything yet.
+
 $ python app.py ask 'vintage graphic tee under $30'
 [1] parse_query
       in:  vintage graphic tee under $30
