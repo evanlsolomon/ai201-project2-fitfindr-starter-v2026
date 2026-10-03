@@ -23,6 +23,7 @@ the description has to say what is *in* the list.
 import config  # noqa: F401 — you'll use this in search_listings
 from generate import generate
 from utils.data_loader import load_listings
+import re
 
 _STOPWORDS = {"a", "an", "the", "and", "or", "but", "with", "for", "to", "of",
               "in", "on", "at", "by", "from", "as", "is", "are", "was", "were", "be", "been", "being"}
@@ -51,6 +52,62 @@ def _size_matches(wanted: str, listing_size: str) -> bool:
     if any(token.startswith("ONE SIZE") for token in listing_tokens):
         return True
     return bool(_size_tokens(wanted) & listing_tokens)
+
+
+def _stem(word: str) -> str:
+    """Drop a plural 's' so 'tees' matches 'tee' and 'tops' matches 'top'."""
+    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]
+    return word
+
+
+def _stems(text: str) -> set[str]:
+    return {_stem(w) for w in _keywords(text)}
+
+
+def _score(query_words: set[str], listing: dict) -> int:
+    """
+    Keyword overlap. A query word found in the title or style tags is worth 2;
+    found only in the description, category or colors it's worth 1.
+    """
+    strong = _stems(listing["title"] + " " + " ".join(listing["style_tags"]))
+    weak = _stems(
+        " ".join([listing["description"], listing["category"], *listing["colors"]])
+    )
+    return sum(2 if w in strong else 1 if w in weak else 0 for w in query_words)
+
+
+def _price(value: float) -> str:
+    """$24 for whole dollars, $24.50 otherwise."""
+    return f"${value:.0f}" if float(value).is_integer() else f"${value:.2f}"
+
+
+def _describe_item(item: dict) -> str:
+    """The listing as plain lines for a prompt. Leaves out brand when there isn't one."""
+    lines = [
+        f"Title: {item['title']}",
+        f"Category: {item['category']}",
+        f"Colors: {', '.join(item['colors'])}",
+        f"Style: {', '.join(item['style_tags'])}",
+        f"Size: {item['size']}",
+        f"Condition: {item['condition']}",
+        f"Price: {_price(item['price'])}",
+        f"Platform: {item['platform']}",
+    ]
+    if item.get("brand"):
+        lines.append(f"Brand: {item['brand']}")
+    return "\n".join(lines)
+
+
+def _describe_wardrobe(items: list[dict]) -> str:
+    lines = []
+    for w in items:
+        line = (f"- {w['name']} ({w['category']}; {', '.join(w['colors'])}; "
+                f"{', '.join(w['style_tags'])})")
+        if w.get("notes"):
+            line += f" — {w['notes']}"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 # ── Tool 1: search_listings ───────────────────────────────────────────────────
@@ -107,8 +164,23 @@ def search_listings(
     Test it from a terminal before you move on:
         python -c "from tools import search_listings; print(search_listings('graphic tee', max_price=30))"
     """
-    # TODO: replace this with your implementation
-    return []
+    query_words = _stems(description)
+    if not query_words:
+        return []
+
+    scored = []
+    for listing in load_listings():
+        if max_price is not None and listing["price"] > max_price:
+            continue
+        if not _size_matches(size, listing["size"]):
+            continue
+        score = _score(query_words, listing)
+        if score > 0:
+            scored.append((score, listing))
+
+    # Highest score first; cheaper first when scores tie.
+    scored.sort(key=lambda pair: (-pair[0], pair[1]["price"]))
+    return [listing for _, listing in scored[: config.SEARCH_RESULT_LIMIT]]
 
 
 # ── Tool 2: suggest_outfit ────────────────────────────────────────────────────
@@ -141,8 +213,37 @@ def suggest_outfit(new_item: dict, wardrobe: dict) -> str:
     Test it from a terminal before you move on:
         python -c "from tools import suggest_outfit; from utils.data_loader import get_example_wardrobe, load_listings; print(suggest_outfit(load_listings()[0], get_example_wardrobe()))"
     """
-    # TODO: replace this with your implementation
-    return ""
+    items = (wardrobe or {}).get("items") or []
+    system = (
+        "You are a practical personal stylist. Answer in plain text, no "
+        "markdown headings. Keep it under 120 words."
+    )
+
+    if not items:
+        prompt = (
+            "Someone is thinking about buying this thrifted item but hasn't "
+            "told you what's in their closet yet.\n\n"
+            f"{_describe_item(new_item)}\n\n"
+            "Suggest two outfits built around it using common basics most "
+            "people own (plain tees, jeans, sneakers and so on). One or two "
+            "sentences per outfit."
+        )
+    else:
+        prompt = (
+            "Someone is thinking about buying this thrifted item:\n\n"
+            f"{_describe_item(new_item)}\n\n"
+            "Here is what they already own:\n"
+            f"{_describe_wardrobe(items)}\n\n"
+            "Suggest two outfits that pair the new item with pieces from "
+            "their wardrobe. Name the wardrobe pieces you use. One or two "
+            "sentences per outfit."
+        )
+
+    text = generate(prompt, system=system)
+    if not text.strip():
+        return (f"Wear the {new_item['title']} with simple basics in neutral "
+                "colors so it stays the focus.")
+    return text
 
 
 # ── Tool 3: create_fit_card ───────────────────────────────────────────────────
@@ -181,5 +282,24 @@ def create_fit_card(outfit: str, new_item: dict) -> str:
     Test it from a terminal before you move on:
         python -c "from tools import create_fit_card; from utils.data_loader import load_listings; print(create_fit_card('jeans and white sneakers', load_listings()[0]))"
     """
-    # TODO: replace this with your implementation
-    return ""
+    if not outfit or not outfit.strip():
+        return (f"Couldn't write a fit card for {new_item.get('title', 'this item')}: "
+                "there was no outfit suggestion to build it from.")
+
+    brand_rule = (
+        "" if new_item.get("brand")
+        else "The listing has no brand, so don't name one.\n"
+    )
+    prompt = (
+        "Write a caption for a social media post about this thrift find.\n\n"
+        f"{_describe_item(new_item)}\n\n"
+        f"How it's being styled:\n{outfit}\n\n"
+        "Rules:\n"
+        "- 2 to 4 sentences, casual first person, like a real post.\n"
+        f"- Mention the price exactly as {_price(new_item['price'])} and the "
+        f"platform ({new_item['platform']}) once each.\n"
+        "- Be specific about the vibe of the outfit.\n"
+        f"{brand_rule}"
+        "- No hashtags. Return only the caption."
+    )
+    return generate(prompt).strip()
