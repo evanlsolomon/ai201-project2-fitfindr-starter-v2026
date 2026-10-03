@@ -41,7 +41,13 @@
 
 <!-- Three or four sentences: what a user asks for, and what they get back. -->
 
-
+FitFindr takes a thrift request in plain language, like
+`'vintage graphic tee under $30, size M'`, and searches 40 mock listings from
+Depop, thredUp and Poshmark for matches on description, size and price. It
+takes the best match, suggests two outfits built from pieces already in the
+user's wardrobe (or from common basics if the wardrobe is empty), and writes a
+short caption the user could actually post. If nothing matches, it stops before
+the outfit step and says which part of the request to loosen.
 
 ---
 
@@ -223,17 +229,39 @@ Channeling all the early 2000s vibes with this adorable butterfly baby tee paire
      "I gave Claude my search_listings spec. It returned None on no match
      instead of an empty list, so I changed it" is the level we want. -->
 
-**Moment 1**
+**Moment 1 — Claude wrote the 'what this does' (Milestone 6)**
 
-- *What I asked for:*
-- *What came back:*
-- *What I changed:*
+- *What I asked for:* I gave Claude my Tool Inventory and asked it to implement
+  `search_listings`, `suggest_outfit` and `create_fit_card` in `tools.py`, with
+  `[]` on no match and general advice for an empty wardrobe.
+- *What came back:* Working code. `search_listings` used the starter's
+  token-based `_size_matches` instead of a substring test, so `M` matches `S/M`
+  but not `XL`, and it dropped plural "s" so `tees` finds `tee`.
+  `create_fit_card` puts the exact price string (`$18`) into the prompt and,
+  when `brand` is `None`, tells the model not to name one. But Claude couldn't
+  reach Gemini from its environment, so it had only checked the two model
+  tools against a fake reply and left their README output blank.
+- *What I changed:* I ran the model tools on my own machine. My first try
+  printed nothing: I had run the template line `python -c "from tools import
+  suggest_outfit; ..."` as written, and Python reads `...` as a value, so the
+  tool was imported but never called. I ran the full commands and pasted the
+  real output into Sample Run.
 
-**Moment 2**
+**Moment 2 — wiring the loop (Milestone 5)**
 
-- *What I asked for:*
-- *What came back:*
-- *What I changed:*
+- *What I asked for:* Fill in `run_agent()` so it follows my branch rule and
+  every value goes through the session.
+- *What came back:* Claude found that `run_agent` was sending the search
+  through an MCP helper, `_search()`, which is unit 4 work. With no MCP tool
+  registered yet it quietly fell back to calling `search_listings` directly,
+  but the trace still said `search_listings (via MCP)`. Claude replaced it with
+  a direct `search_listings(...)` call, then checked with a stand-in model that
+  the item id (`lst_002`) was the same in `search_results[0]`,
+  `selected_item`, and what both `suggest_outfit` and `create_fit_card`
+  received, and that the impossible query left `fit_card` as `None`.
+- *What I changed:* I kept the direct call. A trace that claims an MCP call
+  that isn't happening is the kind of thing that would mislead me in unit 4,
+  and the MCP move belongs to that unit.
 
 <!-- ═══════════════════════ UNIT 4 — THE TEST ═══════════════════════
 
